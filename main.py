@@ -26,11 +26,25 @@ class Ball:
         self.rect = self.image.get_rect()
         self.rect.x = SCREEN_WIDTH // 2
         self.rect.y = 1
-        self.velocity = pygame.Vector2(5, 10)
+        i = 0
+        while i == 0:
+            i = random.randint(-9, 9)
+        self.velocity = pygame.Vector2(i, 10)
 
-    def update(self):
+    def update(self, paddle):
         self.rect.x += self.velocity.x
         self.rect.y += self.velocity.y
+
+        if self.rect.y < 0:
+            self.velocity.y = -self.velocity.y
+
+        if paddle.rect.colliderect(self.rect):
+            self.velocity.y = -self.velocity.y
+            self.velocity *= 1.05
+            return True
+
+        if self.rect.x < 0 or self.rect.x > SCREEN_WIDTH - self.rect.width:
+            self.velocity.x = -self.velocity.x
 
     def draw(self, SCREEN):
         SCREEN.blit(self.image, (self.rect.x, self.rect.y))
@@ -44,28 +58,50 @@ class Paddle:
         self.rect.x = SCREEN_WIDTH // 2
         self.rect.y = SCREEN_HEIGHT - self.rect.height
 
-    def move(self, right):
-        if right:
+    def move(self, index):
+        if index == 0:
             self.rect.x += self.speed
-        else:
+        elif index == 1:
             self.rect.x -= self.speed
+
+        if self.rect.x < 0:
+            self.rect.x = 0
+
+        if self.rect.x > SCREEN_WIDTH - self.rect.width:
+            self.rect.x = SCREEN_WIDTH - self.rect.width
 
     def draw(self, SCREEN):
         SCREEN.blit(self.image, (self.rect.x, self.rect.y))
 
 
-def main():
-    global points
-    ball = Ball()
-    paddle = Paddle()
+def eval_genomes(genomes, config):
+    global points, balls, paddles, ge, nets
     clock = pygame.time.Clock()
     points = 0
 
-    def score():
+    balls = []
+    paddles = []
+    ge = []
+    nets = []
+
+    for genome_id, genome in genomes:
+        paddles.append(Paddle())
+        balls.append(Ball())
+        ge.append(genome)
+        net = neat.nn.FeedForwardNetwork.create(genome, config)
+        nets.append(net)
+        genome.fitness = 0
+
+    def score(genomes):
         global points
         points += 1
-        text = FONT.render(f'Points:  {str(points)}', True, (255, 255, 255))
-        SCREEN.blit(text, (450, 50))
+        if len(genomes) > 0:
+            fittest = genomes[0]
+            for genome in genomes:
+                if genome.fitness > fittest.fitness:
+                    fittest = genome
+            text = FONT.render(f'Fitness:  {str(fittest.fitness)}', True, (255, 255, 255))
+            SCREEN.blit(text, (450, 50))
 
     run = True
 
@@ -76,46 +112,75 @@ def main():
 
         SCREEN.fill((0, 0, 0))
 
-        keys = pygame.key.get_pressed()
+        for i, ball in enumerate(balls):
+            collide = ball.update(paddles[i])
 
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            paddle.move(True)
-        elif keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            paddle.move(False)
+            if collide:
+                ge[i].fitness += 10
 
-        if paddle.rect.x < 0:
-            paddle.rect.x = 0
+            ball.draw(SCREEN)
+            ge[i].fitness += 0.1
 
-        if paddle.rect.x > SCREEN_WIDTH - paddle.rect.width:
-            paddle.rect.x = SCREEN_WIDTH - paddle.rect.width
+            output = nets[i].activate((ball.velocity.x, ball.velocity.y, abs(paddles[i].rect.x - ball.rect.x), abs(paddles[i].rect.y - ball.rect.y)))
+            final_output = output.index(max(output)) - 1
+            paddles[i].move(final_output)
 
-        ball.update()
-        ball.draw(SCREEN)
-        paddle.draw(SCREEN)
+            if ball.rect.y > SCREEN_HEIGHT:
+                ge[i].fitness -= 5
+                nets.pop(i)
+                ge.pop(i)
+                balls.pop(i)
+                paddles.pop(i)
 
-        if ball.rect.y > SCREEN_HEIGHT:
+        for paddle in paddles:
+            paddle.draw(SCREEN)
+
+        if len(balls) == 0:
             run = False
+            break
 
-        if ball.rect.y < 0:
-            ball.velocity.y = -ball.velocity.y
+        # ---------Human Player-------#
+        # keys = pygame.key.get_pressed()
+        # if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+        #     paddle.move(True)
+        # elif keys[pygame.K_a] or keys[pygame.K_LEFT]:
+        #     paddle.move(False)
+        #
+        # if paddle.rect.x < 0:
+        #     paddle.rect.x = 0
+        #
+        # if paddle.rect.x > SCREEN_WIDTH - paddle.rect.width:
+        #     paddle.rect.x = SCREEN_WIDTH - paddle.rect.width
+        #
+        # paddle.draw(SCREEN)
 
-        if paddle.rect.colliderect(ball.rect):
-            ball.velocity.y = -ball.velocity.y
-            ball.velocity *= 1.05
-
-        if ball.rect.x < 0 or ball.rect.x > SCREEN_WIDTH - ball.rect.width:
-            ball.velocity.x = -ball.velocity.x
-
-        score()
+        score(ge)
         clock.tick(30)
         pygame.display.update()
 
-    pygame.quit()
-    exit()
+
+
+def run(config_path):
+    config = neat.config.Config(neat.DefaultGenome, neat.DefaultReproduction,
+                                neat.DefaultSpeciesSet, neat.DefaultStagnation,
+                                config_path)
+
+    p = neat.Population(config)
+
+    p.add_reporter(neat.StdOutReporter(True))
+    stats = neat.StatisticsReporter()
+    p.add_reporter(stats)
+
+    winner = p.run(eval_genomes)
+
+    print("Best fitness -> {}".format(winner))
 
 
 if __name__ == "__main__":
-    main()
+    local_dir = os.path.dirname(__file__)
+    config_path = os.path.join(local_dir, "config.txt")
+    run(config_path)
+
 # Inputs:
 # 1. Position of ball to paddle on x
 # 2. Position of ball to paddle on y
